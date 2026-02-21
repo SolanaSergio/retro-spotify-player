@@ -125,8 +125,18 @@ const TrackRow = ({ track, index, isPlaying, onClick }) => (
 const TrackList = ({ view, playlistId, getPlaylistTracks, getLikedSongs, getRecentlyPlayed, onPlayTrack, currentTrackId }) => {
   const [tracks, setTracks] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [hasMore, setHasMore] = useState(false);
+  const [total, setTotal] = useState(0);
+  const listRef = useRef(null);
+  const PAGE_SIZE = 50;
 
   useEffect(() => {
+    setTracks([]);
+    setSearchQuery('');
+    setHasMore(false);
+    setTotal(0);
     const fetchTracks = async () => {
       setLoading(true);
       try {
@@ -134,9 +144,13 @@ const TrackList = ({ view, playlistId, getPlaylistTracks, getLikedSongs, getRece
         if (view === 'playlist_detail' && playlistId) {
           data = await getPlaylistTracks(playlistId);
           setTracks(data?.items?.map(i => i.track) || []);
+          setTotal(data?.total || 0);
+          setHasMore((data?.items?.length || 0) < (data?.total || 0));
         } else if (view === 'liked') {
-          data = await getLikedSongs();
+          data = await getLikedSongs(PAGE_SIZE, 0);
           setTracks(data?.items?.map(i => i.track) || []);
+          setTotal(data?.total || 0);
+          setHasMore((data?.items?.length || 0) < (data?.total || 0));
         } else if (view === 'recent') {
           data = await getRecentlyPlayed();
           setTracks(data?.items?.map(i => i.track) || []);
@@ -150,21 +164,94 @@ const TrackList = ({ view, playlistId, getPlaylistTracks, getLikedSongs, getRece
     fetchTracks();
   }, [view, playlistId, getPlaylistTracks, getLikedSongs, getRecentlyPlayed]);
 
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      let data;
+      if (view === 'liked') {
+        data = await getLikedSongs(PAGE_SIZE, tracks.length);
+        const newTracks = data?.items?.map(i => i.track) || [];
+        setTracks(prev => [...prev, ...newTracks]);
+        setHasMore(tracks.length + newTracks.length < (data?.total || 0));
+      } else if (view === 'playlist_detail' && playlistId) {
+        data = await getPlaylistTracks(playlistId, 100, tracks.length);
+        const newTracks = data?.items?.map(i => i.track) || [];
+        setTracks(prev => [...prev, ...newTracks]);
+        setHasMore(tracks.length + newTracks.length < (data?.total || 0));
+      }
+    } catch (e) {
+      console.error("Error loading more tracks", e);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [loadingMore, hasMore, view, tracks.length, getLikedSongs, getPlaylistTracks, playlistId]);
+
+  const handleScroll = useCallback((e) => {
+    const el = e.target;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 100) {
+      loadMore();
+    }
+  }, [loadMore]);
+
+  const filteredTracks = searchQuery
+    ? tracks.filter(t => t && (
+        t.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        t.artists?.some(a => a.name?.toLowerCase().includes(searchQuery.toLowerCase())) ||
+        t.album?.name?.toLowerCase().includes(searchQuery.toLowerCase())
+      ))
+    : tracks;
+
   if (loading) return <div style={{ padding: 20 }}>Loading tracks...</div>;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column' }}>
-      {tracks.map((track, i) => (
-        track ? (
-          <TrackRow 
-            key={track.id + i} 
-            track={track} 
-            index={i} 
-            isPlaying={currentTrackId === track.id}
-            onClick={() => onPlayTrack(track.uri)} 
-          />
-        ) : null
-      ))}
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {(view === 'liked' || view === 'playlist_detail') && (
+        <div style={{ padding: '6px 8px', borderBottom: '1px solid #ccc', backgroundColor: '#f0f0f0' }}>
+          <div className="win95-sunken" style={{ display: 'flex', alignItems: 'center', backgroundColor: '#fff', padding: '2px 4px' }}>
+            <span style={{ fontSize: '12px', marginRight: '4px' }}>🔍</span>
+            <input
+              type="text"
+              placeholder="Search by title, artist, or album..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="win95-input"
+              style={{ border: 'none', flex: 1, fontSize: '11px', outline: 'none', padding: '3px 4px', backgroundColor: 'transparent' }}
+            />
+            {searchQuery && (
+              <button onClick={() => setSearchQuery('')} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '12px', padding: '0 4px' }}>✕</button>
+            )}
+          </div>
+          <div style={{ fontSize: '10px', color: '#666', marginTop: '3px' }}>
+            {searchQuery
+              ? `${filteredTracks.length} result${filteredTracks.length !== 1 ? 's' : ''} of ${total || tracks.length} songs`
+              : `${tracks.length} of ${total || tracks.length} songs loaded`}
+          </div>
+        </div>
+      )}
+      <div ref={listRef} onScroll={handleScroll} style={{ flex: 1, overflowY: 'auto' }}>
+        {filteredTracks.map((track, i) => (
+          track ? (
+            <TrackRow
+              key={track.id + i}
+              track={track}
+              index={i}
+              isPlaying={currentTrackId === track.id}
+              onClick={() => onPlayTrack(track.uri)}
+            />
+          ) : null
+        ))}
+        {loadingMore && (
+          <div style={{ padding: '10px', textAlign: 'center', fontSize: '11px', color: '#666' }}>Loading more songs...</div>
+        )}
+        {hasMore && !loadingMore && !searchQuery && (
+          <div style={{ padding: '8px', textAlign: 'center' }}>
+            <button className="win95-button" onClick={loadMore} style={{ fontSize: '11px', padding: '4px 12px' }}>
+              Load More ({tracks.length} / {total})
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 };
@@ -453,7 +540,7 @@ export default function PlayerWindow() {
 
           {/* VIEW: LISTS */}
           {activeView !== 'now_playing' && activeView !== 'visuals' && (
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', backgroundColor: '#fff' }}>
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', backgroundColor: '#fff', overflow: 'hidden' }}>
                <div style={{ padding: '10px', borderBottom: '1px solid #ccc', backgroundColor: '#f0f0f0' }}>
                   <h3 style={{ margin: 0 }}>
                     {activeView === 'liked' && 'Liked Songs'}
@@ -461,12 +548,12 @@ export default function PlayerWindow() {
                     {activeView === 'playlist_detail' && (selectedPlaylist?.name || 'Playlist')}
                   </h3>
                </div>
-               <div className="win95-list" style={{ flex: 1, overflowY: 'auto' }}>
-                  <TrackList 
-                    view={activeView} 
-                    playlistId={selectedPlaylist?.id} 
-                    getPlaylistTracks={getPlaylistTracks} 
-                    getLikedSongs={getLikedSongs} 
+               <div className="win95-list" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                  <TrackList
+                    view={activeView}
+                    playlistId={selectedPlaylist?.id}
+                    getPlaylistTracks={getPlaylistTracks}
+                    getLikedSongs={getLikedSongs}
                     getRecentlyPlayed={getRecentlyPlayed}
                     currentTrackId={track?.id}
                     onPlayTrack={uri => play(activeView === 'playlist_detail' ? selectedPlaylist.uri : null, activeView === 'playlist_detail' ? undefined : [uri])}
